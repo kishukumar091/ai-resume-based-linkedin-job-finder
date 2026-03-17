@@ -13,6 +13,18 @@ export const uploadResume = async (file) => {
   return data;
 };
 
+export const fetchJobs = async (analysisId, filters = {}) => {
+  const { data } = await api.get("/jobs", {
+    params: {
+      analysis_id: analysisId,
+      location: filters.location,
+      preferred_role: filters.preferredRole,
+      preferred_country: filters.preferredCountry
+    }
+  });
+  return data;
+};
+
 export const fetchSavedJobs = async () => {
   const { data } = await api.get("/saved-jobs");
   return data.jobs;

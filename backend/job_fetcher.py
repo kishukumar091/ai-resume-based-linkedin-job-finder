@@ -1,6 +1,5 @@
 import os
 from typing import Dict, List
-from urllib.parse import quote_plus
 
 import requests
 
@@ -9,44 +8,30 @@ ROLE_TEMPLATES = [
     {
         "title": "Python Backend Developer",
         "trigger_skills": {"Python", "FastAPI", "Django", "Flask"},
-        "required_skills": ["Python", "FastAPI", "SQL", "Docker", "AWS"],
-        "companies": ["Infosys", "Zoho", "Paytm"],
     },
     {
         "title": "Java Spring Boot Developer",
         "trigger_skills": {"Java", "Spring Boot"},
-        "required_skills": ["Java", "Spring Boot", "SQL", "Microservices", "Docker"],
-        "companies": ["TCS", "Amazon", "Cognizant"],
     },
     {
         "title": "React Frontend Developer",
         "trigger_skills": {"React", "JavaScript", "TypeScript"},
-        "required_skills": ["React", "JavaScript", "TypeScript", "REST API", "Git"],
-        "companies": ["Swiggy", "Flipkart", "Razorpay"],
     },
     {
         "title": "Full Stack Developer",
         "trigger_skills": {"React", "Node.js", "MongoDB", "SQL"},
-        "required_skills": ["React", "Node.js", "MongoDB", "REST API", "Docker"],
-        "companies": ["Freshworks", "Meesho", "Capgemini"],
     },
     {
         "title": "Data Engineer",
         "trigger_skills": {"Python", "SQL", "AWS", "Data Science"},
-        "required_skills": ["Python", "SQL", "AWS", "Docker", "Kubernetes"],
-        "companies": ["Accenture", "Wipro", "Fractal"],
     },
     {
         "title": "Machine Learning Engineer",
         "trigger_skills": {"Machine Learning", "Data Science", "NLP", "PyTorch", "TensorFlow"},
-        "required_skills": ["Python", "Machine Learning", "NLP", "Docker", "AWS"],
-        "companies": ["NVIDIA", "Samsung Research", "HCLTech"],
     },
     {
         "title": "Cloud DevOps Engineer",
         "trigger_skills": {"AWS", "Azure", "GCP", "Docker", "Kubernetes", "CI/CD"},
-        "required_skills": ["AWS", "Docker", "Kubernetes", "CI/CD", "Linux"],
-        "companies": ["IBM", "Tech Mahindra", "LTIMindtree"],
     },
 ]
 
@@ -62,30 +47,47 @@ RELATED_SKILLS = {
 }
 
 
-def _linkedin_search_link(keywords: List[str], location: str = "India") -> str:
-    query = quote_plus(" ".join(word for word in keywords if word).strip() or "software engineer")
-    location_param = quote_plus(location)
-    return f"https://www.linkedin.com/jobs/search/?keywords={query}&location={location_param}"
+def _normalize_location(location: str) -> str:
+    if location and location.strip():
+        return location
+    return os.getenv("SERPAPI_LOCATION", "United States")
 
 
-def _company_choices(template: Dict, matched_skills: List[str]) -> List[str]:
-    companies = list(template.get("companies", []))
-    if "AWS" in matched_skills and "Amazon" not in companies:
-        companies.insert(0, "Amazon")
-    if "React" in matched_skills and "Meta" not in companies:
-        companies.insert(0, "Meta")
-    if "Machine Learning" in matched_skills and "Google" not in companies:
-        companies.insert(0, "Google")
-    return companies[:3] or ["LinkedIn Jobs"]
+def _normalize_gl() -> str:
+    return os.getenv("SERPAPI_GL", "us").strip().lower() or "us"
 
 
-def _unique_skills(skills: List[str]) -> List[str]:
+def get_country_options() -> List[Dict[str, str]]:
+    return [
+        {"code": "us", "label": "United States"},
+        {"code": "in", "label": "India"},
+        {"code": "uk", "label": "United Kingdom"},
+        {"code": "ca", "label": "Canada"},
+        {"code": "au", "label": "Australia"},
+        {"code": "de", "label": "Germany"},
+    ]
+
+
+def _normalize_hl() -> str:
+    return os.getenv("SERPAPI_HL", "en").strip().lower() or "en"
+
+
+def _debug_enabled() -> bool:
+    return os.getenv("SERPAPI_DEBUG", "true").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _debug_log(message: str) -> None:
+    if _debug_enabled():
+        print(f"[job_fetcher] {message}")
+
+
+def _unique_items(items: List[str]) -> List[str]:
     seen = set()
     ordered = []
-    for skill in skills:
-        if skill and skill not in seen:
-            seen.add(skill)
-            ordered.append(skill)
+    for item in items:
+        if item and item not in seen:
+            seen.add(item)
+            ordered.append(item)
     return ordered
 
 
@@ -94,94 +96,126 @@ def _build_required_skills(base_skills: List[str]) -> List[str]:
     for skill in base_skills[:3]:
         for related in RELATED_SKILLS.get(skill, []):
             required.append(related)
-    return _unique_skills(required)[:6]
+    return _unique_items(required)[:6]
 
 
-def _generate_dynamic_jobs(skills: List[str], location: str) -> List[Dict]:
-    normalized_skills = _unique_skills(skills)
-    jobs: List[Dict] = []
+def _infer_role_queries(skills: List[str]) -> List[str]:
+    normalized_skills = _unique_items(skills)
+    queries: List[str] = []
 
     for template in ROLE_TEMPLATES:
         if template["trigger_skills"].intersection(normalized_skills):
-            matched_skills = sorted(template["trigger_skills"].intersection(normalized_skills))
-            required_skills = _unique_skills(template["required_skills"] + normalized_skills[:2])[:6]
-            for company in _company_choices(template, matched_skills):
-                jobs.append(
-                    {
-                        "title": template["title"],
-                        "company": company,
-                        "location": location,
-                        "skills": required_skills,
-                        "apply_link": _linkedin_search_link([template["title"], company, *matched_skills[:2]], location),
-                        "description": (
-                            f"Open opportunities for {template['title']} at {company} focused on "
-                            f"{', '.join(required_skills[:5])}."
-                        ),
-                    }
-                )
+            queries.append(template["title"])
 
-    if jobs:
-        return jobs
+    if queries:
+        return queries[:4]
 
-    inferred_skills = normalized_skills[:5] or ["Software Engineer"]
-    role_label = f"{inferred_skills[0]} Developer" if normalized_skills else "Software Engineer"
-    return [
-        {
-            "title": role_label,
-            "company": "LinkedIn Jobs",
-            "location": location,
-            "skills": _build_required_skills(inferred_skills),
-            "apply_link": _linkedin_search_link([role_label, *inferred_skills], location),
-            "description": (
-                "Dynamic LinkedIn search generated from resume skills: "
-                f"{', '.join(inferred_skills)}."
-            ),
-        }
-    ]
+    if not normalized_skills:
+        return ["Software Engineer"]
+
+    lead = normalized_skills[0]
+    if lead in {"Python", "Java", "Node.js"}:
+        return [f"{lead} Developer"]
+    if lead in {"React", "JavaScript", "TypeScript"}:
+        return ["Frontend Developer"]
+    if lead in {"Machine Learning", "Data Science", "NLP"}:
+        return ["Machine Learning Engineer"]
+    return [f"{lead} Engineer"]
 
 
-def fetch_jobs(skills: List[str], location: str = "India") -> List[Dict]:
-    api_key = os.getenv("JSEARCH_API_KEY")
+def get_role_options(skills: List[str]) -> List[str]:
+    return _infer_role_queries(skills)
+
+
+def _serpapi_query(skills: List[str], preferred_role: str = "") -> str:
+    normalized_skills = _unique_items(skills)
+    role = preferred_role.strip() if preferred_role and preferred_role.strip() else _infer_role_queries(normalized_skills)[0]
+    primary_skills = " ".join(normalized_skills[:3])
+    return " ".join(part for part in [role, primary_skills] if part).strip()
+
+
+def _extract_required_skills(description: str, resume_skills: List[str]) -> List[str]:
+    description_lower = description.lower()
+    matched = [skill for skill in resume_skills if skill.lower() in description_lower]
+    if matched:
+        return _unique_items(matched)
+    return _build_required_skills(resume_skills)
+
+
+def _extract_apply_link(job: Dict) -> str:
+    apply_options = job.get("apply_options") or []
+    for option in apply_options:
+        link = option.get("link")
+        if link:
+            return link
+    return job.get("share_link") or ""
+
+
+def fetch_jobs(
+    skills: List[str],
+    location: str = "United States",
+    preferred_role: str = "",
+    preferred_country: str = "",
+) -> List[Dict]:
+    api_key = os.getenv("SERPAPI_API_KEY")
     if not api_key:
-        return _generate_dynamic_jobs(skills, location)
+        _debug_log("SERPAPI_API_KEY is missing; returning no jobs.")
+        return []
 
+    normalized_location = _normalize_location(location)
+    query = _serpapi_query(skills, preferred_role)
+    selected_country = preferred_country.strip().lower() if preferred_country and preferred_country.strip() else _normalize_gl()
     params = {
-        "query": " ".join(skills[:5]) or "software engineer",
-        "page": "1",
-        "num_pages": "1",
-        "country": "in",
-        "date_posted": "all",
+        "engine": "google_jobs",
+        "q": query,
+        "location": normalized_location,
+        "gl": selected_country,
+        "hl": _normalize_hl(),
+        "api_key": api_key,
     }
-    headers = {
-        "X-RapidAPI-Key": api_key,
-        "X-RapidAPI-Host": "jsearch.p.rapidapi.com",
-    }
+
+    _debug_log(
+        f"Starting SerpAPI search with query='{query}', location='{normalized_location}', "
+        f"gl='{params['gl']}', hl='{params['hl']}', skills={skills}"
+    )
+
     try:
-        response = requests.get(
-            "https://jsearch.p.rapidapi.com/search",
-            headers=headers,
-            params=params,
-            timeout=15,
-        )
+        response = requests.get("https://serpapi.com/search", params=params, timeout=20)
         response.raise_for_status()
         payload = response.json()
-    except Exception:
-        return _generate_dynamic_jobs(skills, location)
+    except Exception as exc:
+        _debug_log(f"SerpAPI request failed: {exc}")
+        return []
+
+    jobs_results = payload.get("jobs_results") or []
+    _debug_log(f"SerpAPI returned {len(jobs_results)} raw jobs.")
 
     jobs: List[Dict] = []
-    for item in payload.get("data", []):
-        title = item.get("job_title") or "Software Engineer"
-        company = item.get("employer_name") or "Unknown Company"
-        description = item.get("job_description") or ""
-        job_skills = [skill for skill in skills if skill.lower() in description.lower()]
+    seen_job_ids = set()
+
+    for item in jobs_results:
+        job_id = item.get("job_id")
+        if job_id and job_id in seen_job_ids:
+            continue
+        if job_id:
+            seen_job_ids.add(job_id)
+
+        description = item.get("description") or ""
+        apply_link = _extract_apply_link(item)
+        if not apply_link:
+            continue
+
         jobs.append(
             {
-                "title": title,
-                "company": company,
-                "location": item.get("job_city") or location,
-                "skills": job_skills or _build_required_skills(skills),
-                "apply_link": item.get("job_apply_link") or _linkedin_search_link([title, *skills[:2]], location),
-                "description": description or f"Job search result for skills: {', '.join(skills[:5])}",
+                "title": item.get("title") or "Software Engineer",
+                "company": item.get("company_name") or "Unknown Company",
+                "location": item.get("location") or normalized_location,
+                "skills": _extract_required_skills(description, skills),
+                "apply_link": apply_link,
+                "description": description or f"SerpAPI result for query: {query}",
+                "source": "serpapi",
             }
         )
-    return jobs or _generate_dynamic_jobs(skills, location)
+
+    _debug_log(f"Returning {len(jobs[:20])} SerpAPI jobs.")
+    return jobs[:20]
